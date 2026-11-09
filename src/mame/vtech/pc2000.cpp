@@ -166,6 +166,7 @@ public:
 		: gl4004_state(mconfig, type, tag)
 		, m_palette(*this, "palette")
 		, m_ram(*this, "ram")
+		, m_led_caps(*this, "led_caps")
 		, m_powered(true)
 	{ }
 
@@ -188,6 +189,7 @@ private:
 
 	required_device<palette_device> m_palette;
 	required_shared_ptr<uint8_t> m_ram;
+	output_finder<> m_led_caps;
 	bool m_powered;
 };
 
@@ -1098,6 +1100,9 @@ void genio2000_state::port12_w(uint8_t data)
 {
 	beep_w(data);
 
+	// bit 5: caps-lock LED
+	m_led_caps = BIT(data, 5);
+
 	// bit 0: power off request
 	if (BIT(data, 0) && m_powered)
 		power_off();
@@ -1108,6 +1113,7 @@ void genio2000_state::power_off()
 	// halted and blank until ON is pressed
 	m_powered = false;
 	m_maincpu->set_input_line(INPUT_LINE_HALT, ASSERT_LINE);
+	m_led_caps = 0;
 	set_lcd_colours(*m_palette);
 }
 
@@ -1133,6 +1139,7 @@ void genio2000_state::machine_reset()
 	std::fill_n(m_ram.target(), m_ram.bytes(), 0);
 	beep_w(0);
 	key_matrix_w(0);
+	m_led_caps = 0;
 
 	m_powered = true;
 	set_lcd_colours(*m_palette);
