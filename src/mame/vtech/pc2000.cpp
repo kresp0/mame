@@ -43,6 +43,7 @@ Other known international versions:
 #include "speaker.h"
 
 #include "gl3000s.lh"
+#include "genio2000.lh"
 
 
 namespace {
@@ -1191,6 +1192,8 @@ void genio2000_state::genio2000(machine_config &config)
 
 	config.device_remove("beeper");
 	SPEAKER_SOUND(config, m_speaker).add_route(ALL_OUTPUTS, "mono", 1.00);
+
+	config.set_default_layout(layout_genio2000);
 }
 
 /* ROM definition */
