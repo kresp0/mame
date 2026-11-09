@@ -165,13 +165,29 @@ class genio2000_state : public gl4004_state
 public:
 	genio2000_state(const machine_config &mconfig, device_type type, const char *tag)
 		: gl4004_state(mconfig, type, tag)
+		, m_palette(*this, "palette")
+		, m_powered(true)
 	{ }
 
 	void genio2000(machine_config &config);
 
+	DECLARE_INPUT_CHANGED_MEMBER(on_pressed);
+
+protected:
+	virtual void machine_start() override ATTR_COLD;
+	virtual void machine_reset() override ATTR_COLD;
+
 private:
-	void genio2000_palette(palette_device &palette) const;
+	void genio2000_io(address_map &map) ATTR_COLD;
+	void port12_w(uint8_t data);
+	void power_on();
+	void power_off();
+	void set_lcd_colours(palette_device &palette) const;
+	void genio2000_palette(palette_device &palette) const { set_lcd_colours(palette); }
 	HD44780_PIXEL_UPDATE(genio2000_pixel_update);
+
+	required_device<palette_device> m_palette;
+	bool m_powered;
 };
 
 
@@ -685,6 +701,9 @@ static INPUT_PORTS_START( genio2000 )
 	PORT_BIT(0x04, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_NAME("NIVEL")
 	PORT_BIT(0x08, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_NAME("1 JUGADOR")
 	PORT_BIT(0x10, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_NAME("2 JUGADORES")
+	// ON has no known matrix position, so it is a separate input
+	PORT_START("POWER")
+	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("ON") PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(genio2000_state::on_pressed), 0)
 INPUT_PORTS_END
 
 static INPUT_PORTS_START( gl3000s )
@@ -981,13 +1000,14 @@ HD44780_PIXEL_UPDATE(gl4004_state::gl4000_pixel_update)
 	}
 }
 
-void genio2000_state::genio2000_palette(palette_device &palette) const
+void genio2000_state::set_lcd_colours(palette_device &palette) const
 {
-	// pen 0: background, pen 1: lit dot, pen 2: unlit dot
+	// pen 0: background, pen 1: lit dot, pen 2: unlit dot; all background when the unit is off
 	rgb_t const background(138, 146, 148), lit(92, 83, 88);
+	rgb_t const unlit(138 + (92 - 138) / 10, 146 + (83 - 146) / 10, 148 + (88 - 148) / 10);
 	palette.set_pen_color(0, background);
-	palette.set_pen_color(1, lit);
-	palette.set_pen_color(2, rgb_t(138 + (92 - 138) / 10, 146 + (83 - 146) / 10, 148 + (88 - 148) / 10));
+	palette.set_pen_color(1, m_powered ? lit : background);
+	palette.set_pen_color(2, m_powered ? unlit : background);
 }
 
 HD44780_PIXEL_UPDATE(genio2000_state::genio2000_pixel_update)
@@ -1049,9 +1069,72 @@ void gl4004_state::gl4000(machine_config &config)
 	SOFTWARE_LIST(config, "misterx_cart").set_compatible("misterx");
 }
 
+void genio2000_state::genio2000_io(address_map &map)
+{
+	pc2000_io(map);
+	map(0x12, 0x12).rw(FUNC(genio2000_state::beep_r), FUNC(genio2000_state::port12_w));
+}
+
+void genio2000_state::port12_w(uint8_t data)
+{
+	beep_w(data);
+
+	// bit 0: power off request
+	if (BIT(data, 0) && m_powered)
+		power_off();
+}
+
+void genio2000_state::power_off()
+{
+	// halted and blank until ON is pressed
+	m_powered = false;
+	m_maincpu->set_input_line(INPUT_LINE_HALT, ASSERT_LINE);
+	set_lcd_colours(*m_palette);
+}
+
+void genio2000_state::power_on()
+{
+	// ON resets the unit and clears the work RAM; done in place so the video window is not recreated
+	address_space &space = m_maincpu->space(AS_PROGRAM);
+	for (offs_t addr = 0xc000; addr < 0xe000; addr++)
+		space.write_byte(addr, 0);
+
+	beep_w(0);
+	key_matrix_w(0);
+	m_lcdc->reset();
+	m_powered = true;
+	set_lcd_colours(*m_palette);
+	m_maincpu->set_input_line(INPUT_LINE_HALT, CLEAR_LINE);
+	m_maincpu->pulse_input_line(INPUT_LINE_RESET, attotime::zero);
+}
+
+INPUT_CHANGED_MEMBER(genio2000_state::on_pressed)
+{
+	if (newval)
+		power_on();
+}
+
+void genio2000_state::machine_start()
+{
+	gl4004_state::machine_start();
+
+	save_item(NAME(m_powered));
+}
+
+void genio2000_state::machine_reset()
+{
+	gl4004_state::machine_reset();
+
+	m_powered = true;
+	set_lcd_colours(*m_palette);
+	m_maincpu->set_input_line(INPUT_LINE_HALT, CLEAR_LINE);
+}
+
 void genio2000_state::genio2000(machine_config &config)
 {
 	gl4000(config);
+
+	m_maincpu->set_addrmap(AS_IO, &genio2000_state::genio2000_io);
 
 	// Read with a frequency counter, exact derivation unknown
 	m_maincpu->set_clock(6'131'790);
