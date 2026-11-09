@@ -31,6 +31,7 @@ Other known international versions:
 
 #include "cpu/z80/z80.h"
 #include "sound/beep.h"
+#include "sound/spkrdev.h"
 #include "video/hd44780.h"
 #include "video/sed1520.h"
 
@@ -165,6 +166,7 @@ class genio2000_state : public gl4004_state
 public:
 	genio2000_state(const machine_config &mconfig, device_type type, const char *tag)
 		: gl4004_state(mconfig, type, tag)
+		, m_speaker(*this, "speaker")
 		, m_palette(*this, "palette")
 		, m_led_caps(*this, "led_caps")
 		, m_powered(true)
@@ -187,6 +189,7 @@ private:
 	void genio2000_palette(palette_device &palette) const { set_lcd_colours(palette); }
 	HD44780_PIXEL_UPDATE(genio2000_pixel_update);
 
+	required_device<speaker_sound_device> m_speaker;
 	required_device<palette_device> m_palette;
 	output_finder<> m_led_caps;
 	bool m_powered;
@@ -1079,7 +1082,9 @@ void genio2000_state::genio2000_io(address_map &map)
 
 void genio2000_state::port12_w(uint8_t data)
 {
+	// bit 3 is the speaker, toggled directly by the firmware; the beeper is still written because the port reads back
 	beep_w(data);
+	m_speaker->level_w(BIT(data, 3));
 
 	// bit 5: caps-lock LED
 	m_led_caps = BIT(data, 5);
@@ -1094,6 +1099,7 @@ void genio2000_state::power_off()
 	// halted and blank until ON is pressed
 	m_powered = false;
 	m_maincpu->set_input_line(INPUT_LINE_HALT, ASSERT_LINE);
+	m_speaker->level_w(0);
 	m_led_caps = 0;
 	set_lcd_colours(*m_palette);
 }
@@ -1106,6 +1112,7 @@ void genio2000_state::power_on()
 		space.write_byte(addr, 0);
 
 	beep_w(0);
+	m_speaker->level_w(0);
 	m_led_caps = 0;
 	key_matrix_w(0);
 	m_lcdc->reset();
@@ -1151,6 +1158,9 @@ void genio2000_state::genio2000(machine_config &config)
 	m_screen->set_size(120, 40); // 4 lines of 10 dot rows
 	m_screen->set_visarea_full();
 	m_lcdc->set_pixel_update_cb(FUNC(genio2000_state::genio2000_pixel_update));
+
+	m_beep->reset_routes(); // replaces the generic beeper
+	SPEAKER_SOUND(config, m_speaker).add_route(ALL_OUTPUTS, "mono", 1.00);
 }
 
 /* ROM definition */
@@ -1250,7 +1260,7 @@ COMP( 1994, gl2000c,  gl2000, 0,     gl2000,    pc2000,  pc2000_state, empty_ini
 COMP( 1995, gl2000p,  gl2000, 0,     gl2000,    pc2000,  pc2000_state, empty_init, "Video Technology",        "Genius Leader 2000 Plus",                MACHINE_NOT_WORKING )
 COMP( 1996, gl3000s,  0,      0,     gl3000s,   gl3000s, gl3000s_state,empty_init, "Video Technology",        "Genius Leader 3000S (Germany)",          MACHINE_NOT_WORKING )
 COMP( 1994, gl4000,   0,      0,     gl4000,    pc2000,  gl4004_state, empty_init, "Video Technology",        "Genius Leader 4000 Quadro (Germany)",    MACHINE_NOT_WORKING )
-COMP( 199?, genio2000, gl4000, 0,     genio2000, genio2000, genio2000_state, empty_init, "Video Technology",        "Genio 2000 (Spain)",                     MACHINE_NODEVICE_PRINTER | MACHINE_IMPERFECT_SOUND )
+COMP( 199?, genio2000, gl4000, 0,     genio2000, genio2000, genio2000_state, empty_init, "Video Technology",        "Genio 2000 (Spain)",                     MACHINE_NODEVICE_PRINTER )
 COMP( 1996, gl4004,   0,      0,     gl4000,    pc2000,  gl4004_state, empty_init, "Video Technology",        "Genius Leader 4004 Quadro L (Germany)",  MACHINE_NOT_WORKING )
 COMP( 1997, gl5000,   0,      0,     gl5000,    gl3000s, gl3000s_state,empty_init, "Video Technology",        "Genius Leader 5000 (Germany)",           MACHINE_NO_SOUND | MACHINE_NOT_WORKING )
 COMP( 1997, gl5005x,  0,      0,     pc2000,    pc2000,  pc2000_state, empty_init, "Video Technology",        "Genius Leader 5005X (Germany)",          MACHINE_NO_SOUND | MACHINE_NOT_WORKING )
