@@ -166,6 +166,7 @@ public:
 	genio2000_state(const machine_config &mconfig, device_type type, const char *tag)
 		: gl4004_state(mconfig, type, tag)
 		, m_speaker(*this, "speaker")
+		, m_contrast(*this, "CONTRAST")
 		, m_palette(*this, "palette")
 		, m_ram(*this, "ram")
 		, m_led_caps(*this, "led_caps")
@@ -175,6 +176,7 @@ public:
 	void genio2000(machine_config &config);
 
 	DECLARE_INPUT_CHANGED_MEMBER(on_pressed);
+	DECLARE_INPUT_CHANGED_MEMBER(contrast_changed);
 
 protected:
 	virtual void machine_start() override ATTR_COLD;
@@ -185,11 +187,13 @@ private:
 	void genio2000_io(address_map &map) ATTR_COLD;
 	void port12_w(uint8_t data);
 	void power_off();
-	void set_lcd_colours(palette_device &palette) const;
-	void genio2000_palette(palette_device &palette) const { set_lcd_colours(palette); }
+	void set_lcd_colours(palette_device &palette, bool dark) const;
+	void update_lcd_colours() { set_lcd_colours(*m_palette, BIT(m_contrast->read(), 0)); }
+	void genio2000_palette(palette_device &palette) const { set_lcd_colours(palette, false); } // inputs cannot be read at init time
 	HD44780_PIXEL_UPDATE(genio2000_pixel_update);
 
 	required_device<speaker_sound_device> m_speaker;
+	required_ioport m_contrast;
 	required_device<palette_device> m_palette;
 	required_shared_ptr<uint8_t> m_ram;
 	output_finder<> m_led_caps;
@@ -720,6 +724,10 @@ static INPUT_PORTS_START( genio2000 )
 	// ON has no known matrix position, so it is a separate input
 	PORT_START("POWER")
 	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_POWER_ON) PORT_NAME("ON") PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(genio2000_state::on_pressed), 0)
+
+	// two-position slide switch, so a toggle
+	PORT_START("CONTRAST")
+	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_OTHER) PORT_NAME("Contrast switch (right = darker)") PORT_TOGGLE PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(genio2000_state::contrast_changed), 0)
 INPUT_PORTS_END
 
 static INPUT_PORTS_START( gl3000s )
@@ -1016,14 +1024,19 @@ HD44780_PIXEL_UPDATE(gl4004_state::gl4000_pixel_update)
 	}
 }
 
-void genio2000_state::set_lcd_colours(palette_device &palette) const
+void genio2000_state::set_lcd_colours(palette_device &palette, bool dark) const
 {
 	// pen 0: background, pen 1: lit dot, pen 2: unlit dot; all background when the unit is off
-	rgb_t const background(138, 146, 148), lit(92, 83, 88);
-	rgb_t const unlit(
-			background.r() + (lit.r() - background.r()) / 10,
-			background.g() + (lit.g() - background.g()) / 10,
-			background.b() + (lit.b() - background.b()) / 10);
+	// right = darker, unlit dots more visible; amounts taken from photographs of the unit
+	float const gain = dark ? 0.86f : 1.0f;
+	int const unlit_percent = dark ? 22 : 10;
+	auto const scale = [gain] (rgb_t c) { return rgb_t(uint8_t(c.r() * gain), uint8_t(c.g() * gain), uint8_t(c.b() * gain)); };
+	rgb_t const base_background(138, 146, 148), base_lit(92, 83, 88);
+	rgb_t const base_unlit(
+			base_background.r() + (base_lit.r() - base_background.r()) * unlit_percent / 100,
+			base_background.g() + (base_lit.g() - base_background.g()) * unlit_percent / 100,
+			base_background.b() + (base_lit.b() - base_background.b()) * unlit_percent / 100);
+	rgb_t const background = scale(base_background), lit = scale(base_lit), unlit = scale(base_unlit);
 	palette.set_pen_color(0, background);
 	palette.set_pen_color(1, m_powered ? lit : background);
 	palette.set_pen_color(2, m_powered ? unlit : background);
@@ -1122,7 +1135,7 @@ void genio2000_state::power_off()
 	m_maincpu->set_input_line(INPUT_LINE_HALT, ASSERT_LINE);
 	m_speaker->level_w(0);
 	m_led_caps = 0;
-	set_lcd_colours(*m_palette);
+	update_lcd_colours();
 }
 
 INPUT_CHANGED_MEMBER(genio2000_state::on_pressed)
@@ -1130,6 +1143,11 @@ INPUT_CHANGED_MEMBER(genio2000_state::on_pressed)
 	// ON restarts the unit whether it is on or off
 	if (newval)
 		machine().schedule_soft_reset();
+}
+
+INPUT_CHANGED_MEMBER(genio2000_state::contrast_changed)
+{
+	update_lcd_colours();
 }
 
 void genio2000_state::machine_start()
@@ -1151,7 +1169,7 @@ void genio2000_state::machine_reset()
 	m_speaker->level_w(0);
 
 	m_powered = true;
-	set_lcd_colours(*m_palette);
+	update_lcd_colours();
 	m_maincpu->set_input_line(INPUT_LINE_HALT, CLEAR_LINE);
 }
 
