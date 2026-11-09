@@ -167,6 +167,7 @@ public:
 	genio2000_state(const machine_config &mconfig, device_type type, const char *tag)
 		: gl4004_state(mconfig, type, tag)
 		, m_speaker(*this, "speaker")
+		, m_contrast(*this, "CONTRAST")
 		, m_palette(*this, "palette")
 		, m_led_caps(*this, "led_caps")
 		, m_powered(true)
@@ -175,6 +176,7 @@ public:
 	void genio2000(machine_config &config);
 
 	DECLARE_INPUT_CHANGED_MEMBER(on_pressed);
+	DECLARE_INPUT_CHANGED_MEMBER(contrast_changed);
 
 protected:
 	virtual void machine_start() override ATTR_COLD;
@@ -185,11 +187,13 @@ private:
 	void port12_w(uint8_t data);
 	void power_on();
 	void power_off();
-	void set_lcd_colours(palette_device &palette) const;
-	void genio2000_palette(palette_device &palette) const { set_lcd_colours(palette); }
+	void set_lcd_colours(palette_device &palette, bool dark) const;
+	void update_lcd_colours() { set_lcd_colours(*m_palette, BIT(m_contrast->read(), 0)); }
+	void genio2000_palette(palette_device &palette) const { set_lcd_colours(palette, false); } // inputs cannot be read at init time
 	HD44780_PIXEL_UPDATE(genio2000_pixel_update);
 
 	required_device<speaker_sound_device> m_speaker;
+	required_ioport m_contrast;
 	required_device<palette_device> m_palette;
 	output_finder<> m_led_caps;
 	bool m_powered;
@@ -709,6 +713,10 @@ static INPUT_PORTS_START( genio2000 )
 	// ON has no known matrix position, so it is a separate input
 	PORT_START("POWER")
 	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("ON") PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(genio2000_state::on_pressed), 0)
+
+	// two-position slide switch, so a toggle
+	PORT_START("CONTRAST")
+	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_OTHER) PORT_NAME("Contrast switch (right = darker)") PORT_TOGGLE PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(genio2000_state::contrast_changed), 0)
 INPUT_PORTS_END
 
 static INPUT_PORTS_START( gl3000s )
@@ -1005,11 +1013,15 @@ HD44780_PIXEL_UPDATE(gl4004_state::gl4000_pixel_update)
 	}
 }
 
-void genio2000_state::set_lcd_colours(palette_device &palette) const
+void genio2000_state::set_lcd_colours(palette_device &palette, bool dark) const
 {
 	// pen 0: background, pen 1: lit dot, pen 2: unlit dot; all background when the unit is off
-	rgb_t const background(138, 146, 148), lit(92, 83, 88);
-	rgb_t const unlit(138 + (92 - 138) / 10, 146 + (83 - 146) / 10, 148 + (88 - 148) / 10);
+	// right = darker, unlit dots more visible; amounts taken from photographs of the unit
+	float const gain = dark ? 0.86f : 1.0f;
+	int const unlit_percent = dark ? 22 : 10;
+	auto const scale = [gain] (int r, int g, int b) { return rgb_t(uint8_t(r * gain), uint8_t(g * gain), uint8_t(b * gain)); };
+	rgb_t const background = scale(138, 146, 148), lit = scale(92, 83, 88);
+	rgb_t const unlit = scale(138 + (92 - 138) * unlit_percent / 100, 146 + (83 - 146) * unlit_percent / 100, 148 + (88 - 148) * unlit_percent / 100);
 	palette.set_pen_color(0, background);
 	palette.set_pen_color(1, m_powered ? lit : background);
 	palette.set_pen_color(2, m_powered ? unlit : background);
@@ -1101,7 +1113,7 @@ void genio2000_state::power_off()
 	m_maincpu->set_input_line(INPUT_LINE_HALT, ASSERT_LINE);
 	m_speaker->level_w(0);
 	m_led_caps = 0;
-	set_lcd_colours(*m_palette);
+	update_lcd_colours();
 }
 
 void genio2000_state::power_on()
@@ -1117,7 +1129,7 @@ void genio2000_state::power_on()
 	key_matrix_w(0);
 	m_lcdc->reset();
 	m_powered = true;
-	set_lcd_colours(*m_palette);
+	update_lcd_colours();
 	m_maincpu->set_input_line(INPUT_LINE_HALT, CLEAR_LINE);
 	m_maincpu->pulse_input_line(INPUT_LINE_RESET, attotime::zero);
 }
@@ -1126,6 +1138,11 @@ INPUT_CHANGED_MEMBER(genio2000_state::on_pressed)
 {
 	if (newval)
 		power_on();
+}
+
+INPUT_CHANGED_MEMBER(genio2000_state::contrast_changed)
+{
+	update_lcd_colours();
 }
 
 void genio2000_state::machine_start()
@@ -1140,7 +1157,7 @@ void genio2000_state::machine_reset()
 	gl4004_state::machine_reset();
 
 	m_powered = true;
-	set_lcd_colours(*m_palette);
+	update_lcd_colours();
 	m_maincpu->set_input_line(INPUT_LINE_HALT, CLEAR_LINE);
 }
 
