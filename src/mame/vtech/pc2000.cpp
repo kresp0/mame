@@ -152,11 +152,26 @@ public:
 	{ }
 
 	void gl4000(machine_config &config);
-	void genio2000(machine_config &config);
 
 protected:
 	virtual void machine_start() override ATTR_COLD;
 	HD44780_PIXEL_UPDATE(gl4000_pixel_update);
+
+	static uint8_t gl4000_char_position(int line, int pos);
+};
+
+class genio2000_state : public gl4004_state
+{
+public:
+	genio2000_state(const machine_config &mconfig, device_type type, const char *tag)
+		: gl4004_state(mconfig, type, tag)
+	{ }
+
+	void genio2000(machine_config &config);
+
+private:
+	void genio2000_palette(palette_device &palette) const;
+	HD44780_PIXEL_UPDATE(genio2000_pixel_update);
 };
 
 
@@ -944,20 +959,44 @@ void pc2000_state::gl2000(machine_config &config)
 	SOFTWARE_LIST(config, "misterx_cart").set_compatible("misterx");
 }
 
+uint8_t gl4004_state::gl4000_char_position(int line, int pos)
+{
+	static const uint8_t gl4000_display_layout[] =
+	{
+		0x00, 0x01, 0x02, 0x03, 0x28, 0x29, 0x2a, 0x2b, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x2c, 0x2d, 0x2e, 0x2f,
+		0x30, 0x31, 0x32, 0x33, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b,
+		0x14, 0x15, 0x16, 0x17, 0x3c, 0x3d, 0x3e, 0x3f, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x40, 0x41, 0x42, 0x43,
+		0x44, 0x45, 0x46, 0x47, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f
+	};
+
+	return gl4000_display_layout[line*40 + pos];
+}
+
 HD44780_PIXEL_UPDATE(gl4004_state::gl4000_pixel_update)
 {
 	if (pos < 40)
 	{
-		static const uint8_t gl4000_display_layout[] =
-		{
-			0x00, 0x01, 0x02, 0x03, 0x28, 0x29, 0x2a, 0x2b, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x2c, 0x2d, 0x2e, 0x2f,
-			0x30, 0x31, 0x32, 0x33, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b,
-			0x14, 0x15, 0x16, 0x17, 0x3c, 0x3d, 0x3e, 0x3f, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x40, 0x41, 0x42, 0x43,
-			0x44, 0x45, 0x46, 0x47, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f
-		};
-
-		uint8_t char_pos = gl4000_display_layout[line*40 + pos];
+		uint8_t const char_pos = gl4000_char_position(line, pos);
 		bitmap.pix((char_pos / 20) * 9 + y, (char_pos % 20) * 6 + x) = state;
+	}
+}
+
+void genio2000_state::genio2000_palette(palette_device &palette) const
+{
+	// pen 0: background, pen 1: lit dot, pen 2: unlit dot
+	rgb_t const background(138, 146, 148), lit(92, 83, 88);
+	palette.set_pen_color(0, background);
+	palette.set_pen_color(1, lit);
+	palette.set_pen_color(2, rgb_t(138 + (92 - 138) / 10, 146 + (83 - 146) / 10, 148 + (88 - 148) / 10));
+}
+
+HD44780_PIXEL_UPDATE(genio2000_state::genio2000_pixel_update)
+{
+	if (pos < 40)
+	{
+		// glyph row 7 (cursor, a few symbols) is drawn detached, one row lower
+		uint8_t const char_pos = gl4000_char_position(line, pos);
+		bitmap.pix((char_pos / 20) * 10 + ((y == 7) ? 8 : y), (char_pos % 20) * 6 + x) = state ? 1 : 2;
 	}
 }
 
@@ -1010,13 +1049,18 @@ void gl4004_state::gl4000(machine_config &config)
 	SOFTWARE_LIST(config, "misterx_cart").set_compatible("misterx");
 }
 
-void gl4004_state::genio2000(machine_config &config)
+void genio2000_state::genio2000(machine_config &config)
 {
 	gl4000(config);
 
 	// Read with a frequency counter, exact derivation unknown
 	m_maincpu->set_clock(6'131'790);
 	m_maincpu->set_periodic_int(FUNC(pc2000_state::irq0_line_hold), attotime::from_hz(46.76)); // measured on the unit
+
+	PALETTE(config.replace(), "palette", FUNC(genio2000_state::genio2000_palette), 3);
+	m_screen->set_size(120, 40); // 4 lines of 10 dot rows
+	m_screen->set_visarea_full();
+	m_lcdc->set_pixel_update_cb(FUNC(genio2000_state::genio2000_pixel_update));
 }
 
 /* ROM definition */
@@ -1116,7 +1160,7 @@ COMP( 1994, gl2000c,  gl2000, 0,     gl2000,    pc2000,  pc2000_state, empty_ini
 COMP( 1995, gl2000p,  gl2000, 0,     gl2000,    pc2000,  pc2000_state, empty_init, "Video Technology",        "Genius Leader 2000 Plus",                MACHINE_NOT_WORKING )
 COMP( 1996, gl3000s,  0,      0,     gl3000s,   gl3000s, gl3000s_state,empty_init, "Video Technology",        "Genius Leader 3000S (Germany)",          MACHINE_NOT_WORKING )
 COMP( 1994, gl4000,   0,      0,     gl4000,    pc2000,  gl4004_state, empty_init, "Video Technology",        "Genius Leader 4000 Quadro (Germany)",    MACHINE_NOT_WORKING )
-COMP( 199?, genio2000, gl4000, 0,     genio2000, genio2000, gl4004_state, empty_init, "Video Technology",        "Genio 2000 (Spain)",                     MACHINE_NODEVICE_PRINTER | MACHINE_IMPERFECT_SOUND )
+COMP( 199?, genio2000, gl4000, 0,     genio2000, genio2000, genio2000_state, empty_init, "Video Technology",        "Genio 2000 (Spain)",                     MACHINE_NODEVICE_PRINTER | MACHINE_IMPERFECT_SOUND )
 COMP( 1996, gl4004,   0,      0,     gl4000,    pc2000,  gl4004_state, empty_init, "Video Technology",        "Genius Leader 4004 Quadro L (Germany)",  MACHINE_NOT_WORKING )
 COMP( 1997, gl5000,   0,      0,     gl5000,    gl3000s, gl3000s_state,empty_init, "Video Technology",        "Genius Leader 5000 (Germany)",           MACHINE_NO_SOUND | MACHINE_NOT_WORKING )
 COMP( 1997, gl5005x,  0,      0,     pc2000,    pc2000,  pc2000_state, empty_init, "Video Technology",        "Genius Leader 5005X (Germany)",          MACHINE_NO_SOUND | MACHINE_NOT_WORKING )
